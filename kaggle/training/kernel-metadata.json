@@ -1,0 +1,21 @@
+{
+  "id": "shawnliu30/birdclef-2026-training",
+  "title": "BirdCLEF 2026 Training",
+  "code_file": "training.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": "true",
+  "enable_gpu": "true",
+  "enable_internet": "false",
+  "dataset_sources": [
+    "shawnliu30/birdclef-2026-wav-00",
+    "shawnliu30/birdclef-2026-wav-01",
+    "shawnliu30/birdclef-2026-wav-02",
+    "shawnliu30/birdclef-2026-wav-03"
+  ],
+  "competition_sources": [
+    "birdclef-2026"
+  ],
+  "kernel_sources": [],
+  "model_sources": []
+}
