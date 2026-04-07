@@ -2,3 +2,5 @@
 kaggle/inference/kernel-metadata.json
 kaggle/training/kernel-metadata.json
 kaggle/utilities/dataset-metadata.json
+__pycache__/
+*.pyc

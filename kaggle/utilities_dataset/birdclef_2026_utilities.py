@@ -5,20 +5,17 @@ import pandas as pd
 import os
 import random
 import ast
-from datetime import datetime
 
 import soundfile as sf
 import timm
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import torchaudio
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import GroupShuffleSplit
 from pathlib import Path
 
 from torch.amp import GradScaler, autocast
-from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader, Dataset
 
 
@@ -57,12 +54,52 @@ class AudioToSpec:
         spec = torch.clamp(spec, 0.0, 1.0)
         return spec
 
+class SpecAugment:
+    def __init__(self, config: dict | None = None):
+        self.config = config
+
+        self.enabled = self.config["enabled"]
+        self.probability = self.config["probability"]
+        self.num_time_masks = self.config["num_time_masks"]
+        self.time_mask_param = self.config["time_mask_param"]
+        self.num_freq_masks = self.config["num_freq_masks"]
+        self.freq_mask_param = self.config["freq_mask_param"]
+
+        self.time_mask = None
+        self.freq_mask = None
+        if self.time_mask_param > 0:
+            self.time_mask = torchaudio.transforms.TimeMasking(
+                time_mask_param=self.time_mask_param
+            )
+        if self.freq_mask_param > 0:
+            self.freq_mask = torchaudio.transforms.FrequencyMasking(
+                freq_mask_param=self.freq_mask_param
+            )
+
+    def __call__(self, spec: torch.Tensor) -> torch.Tensor:
+        if not self.enabled or random.random() >= self.probability:
+            return spec
+
+        augmented = spec.unsqueeze(0)
+
+        if self.freq_mask is not None:
+            for _ in range(self.num_freq_masks):
+                augmented = self.freq_mask(augmented)
+
+        if self.time_mask is not None:
+            for _ in range(self.num_time_masks):
+                augmented = self.time_mask(augmented)
+
+        return augmented.squeeze(0)
+
 
 class BirdClefDataset(Dataset):
     def __init__(
         self,
         df,
         mel_config,
+        mixup_config,
+        specaugment_config,
         class_to_idx,
         sample_rate,
         duration,
@@ -75,6 +112,8 @@ class BirdClefDataset(Dataset):
         self.train = train
         self.num_samples = sample_rate * duration
         self.audio_to_spec = AudioToSpec(mel_config)
+        self.wave_mixup_config = mixup_config
+        self.spec_augment = SpecAugment(specaugment_config)
 
     def __len__(self):
         return len(self.df)
@@ -130,17 +169,59 @@ class BirdClefDataset(Dataset):
         wave = self._fix_length(wave)
         return wave
 
-    def __getitem__(self, idx):
-        row = self.df.iloc[idx]
-        wave = self._load_audio_window(row)
-        spec = self.audio_to_spec(torch.tensor(wave, dtype=torch.float32)).unsqueeze(0)
-
+    def _build_target(self, row) -> torch.Tensor:
         target = torch.zeros(len(self.class_to_idx), dtype=torch.float32)
         for label in row["labels"]:
             if label in self.class_to_idx:
                 target[self.class_to_idx[label]] = 1.0
+        return target
 
-        return spec, target
+    def _sample_mixup_lambda(self) -> float:
+        alpha = self.wave_mixup_config["alpha"]
+        if alpha <= 0.0:
+            return 1.0
+        return float(np.random.beta(alpha, alpha))
+
+    def _apply_wave_mixup(
+        self,
+        wave: np.ndarray,
+        target: torch.Tensor,
+        idx: int,
+    ) -> tuple[np.ndarray, torch.Tensor]:
+        if not self.train or not self.wave_mixup_config["enabled"]:
+            return wave, target
+
+        probability = self.wave_mixup_config["probability"]
+        if probability <= 0.0 or random.random() >= probability or len(self.df) < 2:
+            return wave, target
+
+        mix_idx = random.randrange(len(self.df) - 1)
+        if mix_idx >= idx:
+            mix_idx += 1
+
+        mix_row = self.df.iloc[mix_idx]
+        mix_wave = self._load_audio_window(mix_row)
+        mix_target = self._build_target(mix_row)
+        lam = self._sample_mixup_lambda()
+
+        mixed_wave = lam * wave + (1.0 - lam) * mix_wave
+        mixed_target = lam * target + (1.0 - lam) * mix_target
+        return mixed_wave.astype(np.float32), mixed_target
+
+    def __getitem__(self, idx):
+        row = self.df.iloc[idx]
+        wave = self._load_audio_window(row)
+        target = self._build_target(row)
+
+        if self.train and self.wave_mixup_config["enabled"]:
+            wave, target = self._apply_wave_mixup(wave, target, idx)
+        
+        spec = self.audio_to_spec(torch.tensor(wave, dtype=torch.float32))
+
+        if self.train and self.spec_augment.enabled:
+            spec = self.spec_augment(spec)
+
+        return spec.unsqueeze(0), target
 
 
 class BirdClefEfficientNet(nn.Module):
@@ -422,6 +503,8 @@ def build_loaders(config) -> tuple[DataLoader, DataLoader, dict[str, int]]:
     train_ds = BirdClefDataset(
         df=train_df,
         mel_config=config["mel_spectrogram"],
+        mixup_config=config["augmentations"]["wave_mixup"],
+        specaugment_config=config["augmentations"]["specaugment"],
         class_to_idx=class_to_idx,
         sample_rate=config["audio"]["sample_rate"],
         duration=config["audio"]["duration"],
@@ -431,6 +514,8 @@ def build_loaders(config) -> tuple[DataLoader, DataLoader, dict[str, int]]:
     val_ds = BirdClefDataset(
         df=val_df,
         mel_config=config["mel_spectrogram"],
+        mixup_config=config["augmentations"]["wave_mixup"],
+        specaugment_config=config["augmentations"]["specaugment"],
         class_to_idx=class_to_idx,
         sample_rate=config["audio"]["sample_rate"],
         duration=config["audio"]["duration"],

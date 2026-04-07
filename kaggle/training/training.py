@@ -9,6 +9,7 @@ from datetime import datetime
 
 import torch
 import torch.nn as nn
+from torch.amp import GradScaler
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
 pd.set_option("display.max_columns", None)
@@ -42,7 +43,7 @@ from birdclef_2026_utilities import (
 
 
 CONFIG = {
-    "experiment_name": "efficientnet_baseline_audio_soundscape_joint_training",
+    "experiment_name": "efficientnet_baseline_audio_soundscape_joint_training_wave_mixup_and_specaugment",
     "paths": {
         "train_audio": "/kaggle/input/competitions/birdclef-2026/train_audio",
     
@@ -75,6 +76,21 @@ CONFIG = {
     "audio": {
         "sample_rate": 32000,
         "duration": 5,
+    },
+    "augmentations": {
+        "wave_mixup": {
+            "enabled": True,
+            "probability": 0.3,
+            "alpha": 0.2,
+        },
+        "specaugment": {
+            "enabled": True,
+            "probability": 0.5,
+            "num_time_masks": 1,
+            "time_mask_param": 16,
+            "num_freq_masks": 1,
+            "freq_mask_param": 8,
+        },
     },
     "dataloader": {
         "num_workers": 4,

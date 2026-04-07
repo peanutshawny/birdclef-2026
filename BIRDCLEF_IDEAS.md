@@ -1,22 +1,5 @@
 # BirdCLEF Ideas Tracker
 
-## Current Baseline
-- Status: completed and trusted
-- Joint supervised training on combined `train_audio` + labeled `train_soundscapes`
-- Metric tracking per epoch: `train_loss`, `val_loss`, `val_auc`
-- Best checkpoint selected by `val_auc`
-- Separate soundscape fine-tuning removed
-- Current default framing: multi-label clip classifier baseline, not full SED yet
-- Fast WAV-backed loading is working for `train_audio`
-- Current trusted single-split run:
-- `Mapped wav paths: 35549`
-- `Existing wav paths: 35549`
-- `train rows: 29671`
-- `validation rows: 7356`
-- `num classes: 234`
-- `epoch 8/8: train_loss=0.0137, val_loss=0.0174, val_auc=0.9373`
-- Runtime improvement: single-split training dropped from about `1.5h` to about `25 min`
-
 ## Completed Foundation Work
 
 ### Joint Audio + Soundscape Training
@@ -258,11 +241,6 @@
 - Why: explicitly reinforced by the pasted SED plan and low-risk if multiple checkpoints are saved
 
 ## Validation / Analysis
-
-### Track Soundscape-Specific Validation Separately
-- Status: planned
-- Even with joint train/val, keep an eye on soundscape-only validation slices
-- Why: soundscape behavior is still what matters most at test time
 
 ### Error Analysis By Source
 - Status: planned

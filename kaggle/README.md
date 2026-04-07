@@ -6,6 +6,7 @@
 
 ## Training kernel
 - Push the utilities dataset first so the kernel can import it
+- Wave mixup and SpecAugment are controlled in `kaggle/training/training.py` under `CONFIG["augmentations"]`
 - Push: `kaggle kernels push -p kaggle/training`
 - Status: `kaggle kernels status shawnliu30/birdclef-2026-training-script`
 - Download outputs: `kaggle kernels output shawnliu30/birdclef-2026-training-script -p out/training`

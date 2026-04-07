@@ -59,7 +59,7 @@ INFER_CONFIG = {
     },
 }
 
-
+print(f"Using checkpoint: {CHECKPOINT_PATH}")
 torch.set_num_threads(max(1, os.cpu_count() or 1))
 device = "cpu"
 
