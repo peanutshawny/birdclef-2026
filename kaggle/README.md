@@ -1,25 +1,25 @@
 # Kaggle CLI Workflow
 
-## First-time setup
-1. Create a Kaggle API token from your Kaggle account settings.
-2. Save it to `~/.kaggle/kaggle.json` and set permissions to `600`.
+## Shared utilities dataset
+- First publish: `kaggle datasets create -p kaggle/utilities_dataset`
+- Later updates: `kaggle datasets version -p kaggle/utilities_dataset -m "update utilities"`
 
 ## Training kernel
-- Sync shared utilities first if you edited `src/birdclef_2026_utilities.py`: `python scripts/sync_kaggle_utilities.py`
+- Push the utilities dataset first so the kernel can import it
 - Push: `kaggle kernels push -p kaggle/training`
-- Status: `kaggle kernels status shawnliu30/birdclef-2026-training`
-- Download outputs: `kaggle kernels output shawnliu30/birdclef-2026-training -p out/training`
+- Status: `kaggle kernels status shawnliu30/birdclef-2026-training-script`
+- Download outputs: `kaggle kernels output shawnliu30/birdclef-2026-training-script -p out/training`
 
 ## Inference kernel
-- Sync shared utilities first if you edited `src/birdclef_2026_utilities.py`: `python scripts/sync_kaggle_utilities.py`
+- Push the utilities dataset first so the kernel can import it
 - Push: `kaggle kernels push -p kaggle/inference`
-- Status: `kaggle kernels status shawnliu30/birdclef-2026-inference`
-- Download outputs: `kaggle kernels output shawnliu30/birdclef-2026-inference -p out/inference`
+- Status: `kaggle kernels status shawnliu30/birdclef-2026-inference-script`
+- Download outputs: `kaggle kernels output shawnliu30/birdclef-2026-inference-script -p out/inference`
 
 ## Submit
 - `kaggle competitions submit -c birdclef-2026 -f out/inference/submission.csv -m "your message"`
 
 ## Notes
-- Training includes the four WAV shard datasets directly in `kernel-metadata.json`.
-- Inference currently depends on the latest output of `shawnliu30/birdclef-2026-training` via `kernel_sources`.
-- The shared utility module is vendored into both kernel folders so it no longer needs to be attached as a separate notebook source.
+- Training includes the shared utilities dataset plus the four WAV shard datasets directly in `kernel-metadata.json`.
+- Inference currently depends on the latest output of `shawnliu30/birdclef-2026-training-script` via `kernel_sources`.
+- Both kernels import `birdclef_2026_utilities.py` from the attached `shawnliu30/birdclef-2026-utilities` dataset on Kaggle and fall back to `kaggle/utilities_dataset` locally.

@@ -1,21 +1,32 @@
 # Auto-generated from birdclef-2026-inference.ipynb for local Kaggle CLI workflow.
 
 import os
+import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import soundfile as sf
-import timm
 import torch
-import torch.nn as nn
-import torchaudio
 from tqdm.auto import tqdm
 
+UTILS_MODULE = "birdclef_2026_utilities.py"
+UTILS_SEARCH_DIRS = [
+    Path("/kaggle/input/datasets/shawnliu30/birdclef-2026-utilities-dataset"),
+    Path("/kaggle/input/birdclef-2026-utilities-dataset"),
+    Path(__file__).resolve().parents[1] / "utilities_dataset",
+]
+
+for utils_dir in UTILS_SEARCH_DIRS:
+    if (utils_dir / UTILS_MODULE).exists():
+        print(f"Found {UTILS_MODULE} in {utils_dir}, adding to sys.path")
+        sys.path.insert(0, str(utils_dir))
+        break
+else:
+    raise FileNotFoundError(
+        f"Could not find {UTILS_MODULE} in any of: {UTILS_SEARCH_DIRS}"
+    )
 from birdclef_2026_utilities import (
-    AudioToSpec,
     BirdClefEfficientNet,
-    build_segment_tensor,
     predict_file
 )
 
@@ -24,7 +35,11 @@ COMP_DIR = Path("/kaggle/input/competitions/birdclef-2026")
 TEST_DIR = COMP_DIR / "test_soundscapes"
 SAMPLE_SUBMISSION = COMP_DIR / "sample_submission.csv"
 
-CHECKPOINT_PATH = Path("/kaggle/input/notebooks/shawnliu30/birdclef-2026-training/efficientnet_baseline_audio_soundscape_joint_training_20260406_194229_best.pth") # edit this
+CHECKPOINT_DIR = Path("/kaggle/input/notebooks/shawnliu30/birdclef-2026-training-script")
+CHECKPOINT_CANDIDATES = sorted(CHECKPOINT_DIR.glob("*_best.pth"))
+if not CHECKPOINT_CANDIDATES:
+    raise FileNotFoundError(f"No *_best.pth checkpoint found in {CHECKPOINT_DIR}")
+CHECKPOINT_PATH = CHECKPOINT_CANDIDATES[-1]
 
 INFER_CONFIG = {
     "model_name": "tf_efficientnet_b0.ns_jft_in1k",

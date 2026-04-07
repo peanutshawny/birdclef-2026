@@ -3,25 +3,35 @@
 import numpy as np
 import pandas as pd
 import os
-import random
+import sys
+from pathlib import Path
 from datetime import datetime
 
-import soundfile as sf
-import timm
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-import torchaudio
-from sklearn.metrics import roc_auc_score
-from sklearn.model_selection import train_test_split
-from torch.amp import GradScaler, autocast
 from torch.optim.lr_scheduler import CosineAnnealingLR
-from torch.utils.data import DataLoader, Dataset
 
 pd.set_option("display.max_columns", None)
 pd.set_option("display.max_colwidth", None)
 pd.set_option("display.width", None)
 
+
+UTILS_MODULE = "birdclef_2026_utilities.py"
+UTILS_SEARCH_DIRS = [
+    Path("/kaggle/input/datasets/shawnliu30/birdclef-2026-utilities-dataset"),
+    Path("/kaggle/input/birdclef-2026-utilities-dataset"),
+    Path(__file__).resolve().parents[1] / "utilities_dataset",
+]
+
+for utils_dir in UTILS_SEARCH_DIRS:
+    if (utils_dir / UTILS_MODULE).exists():
+        print(f"Found {UTILS_MODULE} in {utils_dir}, adding to sys.path")
+        sys.path.insert(0, str(utils_dir))
+        break
+else:
+    raise FileNotFoundError(
+        f"Could not find {UTILS_MODULE} in any of: {UTILS_SEARCH_DIRS}"
+    )
 
 from birdclef_2026_utilities import (
     BirdClefEfficientNet,

@@ -1,13 +1,14 @@
 {
-  "id": "shawnliu30/birdclef-2026-training",
-  "title": "BirdCLEF 2026 Training",
+  "id": "shawnliu30/birdclef-2026-training-script",
+  "title": "BirdCLEF 2026 Training Script",
   "code_file": "training.py",
   "language": "python",
   "kernel_type": "script",
   "is_private": "true",
   "enable_gpu": "true",
-  "enable_internet": "false",
+  "enable_internet": "true",
   "dataset_sources": [
+    "shawnliu30/birdclef-2026-utilities-dataset",
     "shawnliu30/birdclef-2026-wav-00",
     "shawnliu30/birdclef-2026-wav-01",
     "shawnliu30/birdclef-2026-wav-02",

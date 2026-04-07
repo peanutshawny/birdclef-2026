@@ -1,18 +1,20 @@
 {
-  "id": "shawnliu30/birdclef-2026-inference",
-  "title": "BirdCLEF 2026 Inference",
+  "id": "shawnliu30/birdclef-2026-inference-script",
+  "title": "BirdCLEF 2026 Inference Script",
   "code_file": "inference.py",
   "language": "python",
   "kernel_type": "script",
   "is_private": "true",
   "enable_gpu": "false",
   "enable_internet": "false",
-  "dataset_sources": [],
+  "dataset_sources": [
+    "shawnliu30/birdclef-2026-utilities-dataset"
+  ],
   "competition_sources": [
     "birdclef-2026"
   ],
   "kernel_sources": [
-    "shawnliu30/birdclef-2026-training"
+    "shawnliu30/birdclef-2026-training-script"
   ],
   "model_sources": []
 }
