@@ -14,7 +14,7 @@
     "birdclef-2026"
   ],
   "kernel_sources": [
-    "shawnliu30/birdclef-2026-training-script"
+    "shawnliu30/efficientnet-baseline-new-frontend"
   ],
   "model_sources": []
 }

@@ -35,29 +35,19 @@ COMP_DIR = Path("/kaggle/input/competitions/birdclef-2026")
 TEST_DIR = COMP_DIR / "test_soundscapes"
 SAMPLE_SUBMISSION = COMP_DIR / "sample_submission.csv"
 
-CHECKPOINT_DIR = Path("/kaggle/input/notebooks/shawnliu30/birdclef-2026-training-script")
-CHECKPOINT_CANDIDATES = sorted(CHECKPOINT_DIR.glob("*_best.pth"))
+CHECKPOINT_SEARCH_ROOT = Path("/kaggle/input")
+CHECKPOINT_CANDIDATES = sorted(CHECKPOINT_SEARCH_ROOT.rglob("*_best.pth"))
 if not CHECKPOINT_CANDIDATES:
-    raise FileNotFoundError(f"No *_best.pth checkpoint found in {CHECKPOINT_DIR}")
-CHECKPOINT_PATH = CHECKPOINT_CANDIDATES[-1]
-
-INFER_CONFIG = {
-    "model_name": "tf_efficientnet_b0.ns_jft_in1k",
-    "sample_rate": 32000,
-    "duration": 5,
-    "infer_batch_size": 24,
-    "mel_spectrogram": {
-        "sample_rate": 32000,
-        "n_mels": 128,
-        "n_fft": 1024,
-        "hop_length": 320,
-        "win_length": 1024,
-        "f_min": 40,
-        "f_max": 15000,
-        "top_db": 80,
-        "power": 2.0,
-    },
-}
+    raise FileNotFoundError(
+        f"No *_best.pth checkpoint found under {CHECKPOINT_SEARCH_ROOT}"
+    )
+if len(CHECKPOINT_CANDIDATES) > 1:
+    raise RuntimeError(
+        "Multiple *_best.pth checkpoints found under "
+        f"{CHECKPOINT_SEARCH_ROOT}:\n"
+        + "\n".join(f"- {path}" for path in CHECKPOINT_CANDIDATES)
+    )
+CHECKPOINT_PATH = CHECKPOINT_CANDIDATES[0]
 
 print(f"Using checkpoint: {CHECKPOINT_PATH}")
 torch.set_num_threads(max(1, os.cpu_count() or 1))
@@ -67,15 +57,25 @@ submission = pd.read_csv(SAMPLE_SUBMISSION)
 target_columns = [col for col in submission.columns if col != "row_id"]
 
 checkpoint = torch.load(CHECKPOINT_PATH, map_location=device)
+checkpoint_config = checkpoint.get("config", {})
+
+if not checkpoint_config:
+    raise ValueError("Checkpoint config empty.")
+
 class_to_idx = checkpoint["class_to_idx"]
 idx_to_class = {idx: label for label, idx in class_to_idx.items()}
 
+INFER_CONFIG = {
+    "model_name": checkpoint_config["train"]["efficentnet_name"],
+    "sample_rate": checkpoint_config["audio"]["sample_rate"],
+    "duration": checkpoint_config["audio"]["duration"],
+    "infer_batch_size": 24,
+    "mel_spectrogram": checkpoint_config["mel_spectrogram"],
+}
+
 model = BirdClefEfficientNet(
     num_classes=len(class_to_idx),
-    model_name=checkpoint.get("config", {}).get("train", {}).get(
-        "efficentnet_name",
-        INFER_CONFIG["model_name"],
-    ),
+    model_name=INFER_CONFIG["model_name"],
     is_pretrained=False
 )
 model.load_state_dict(checkpoint["model_state_dict"])

@@ -39,11 +39,44 @@ from birdclef_2026_utilities import (
     train_one_epoch,
     validate_one_epoch,
     build_loaders,
+    seed_everything,
 )
 
 
+BASELINE_MEL_SPECTROGRAM = {
+    "sample_rate": 32000,
+    "n_mels": 128,
+    "n_fft": 1024,
+    "hop_length": 320,
+    "win_length": 1024,
+    "f_min": 40,
+    "f_max": 15000,
+    "top_db": 80,
+    "power": 2.0,
+    "normalization": "top_db",
+    "resize_shape": None,
+}
+
+HGNET_MEL_SPECTROGRAM = {
+    "sample_rate": 32000,
+    "n_mels": 256,
+    "n_fft": 2048,
+    "hop_length": 313,
+    "win_length": 626,
+    "f_min": 20,
+    "f_max": None,
+    "top_db": 80,
+    "power": 2.0,
+    "center": True,
+    "pad_mode": "reflect",
+    "norm": "slaney",
+    "mel_scale": "htk",
+    "resize_shape": (256, 256),
+    "normalization": "sample_minmax",
+}
+
+
 CONFIG = {
-    "experiment_name": "efficientnet_baseline_audio_soundscape_joint_training_wave_mixup_and_specaugment",
     "paths": {
         "train_audio": "/kaggle/input/competitions/birdclef-2026/train_audio",
     
@@ -57,17 +90,7 @@ CONFIG = {
         "train_soundscapes_labels_csv": "/kaggle/input/competitions/birdclef-2026/train_soundscapes_labels.csv",
     },
 
-    "mel_spectrogram":{
-        "sample_rate": 32000,
-        "n_mels": 128,
-        "n_fft": 1024,
-        "hop_length": 320,
-        "win_length": 1024,
-        "f_min": 40,
-        "f_max": 15000,
-        "top_db": 80,
-        "power": 2.0
-    },
+    "mel_spectrogram": BASELINE_MEL_SPECTROGRAM,
     "train_columns": {
         "audio_col": "path",
         "primary_label_col": "primary_label",
@@ -79,12 +102,12 @@ CONFIG = {
     },
     "augmentations": {
         "wave_mixup": {
-            "enabled": True,
+            "enabled": False,
             "probability": 0.3,
             "alpha": 0.2,
         },
         "specaugment": {
-            "enabled": True,
+            "enabled": False,
             "probability": 0.5,
             "num_time_masks": 1,
             "time_mask_param": 16,
@@ -109,6 +132,7 @@ CONFIG = {
 }
 
 
+seed_everything(CONFIG["train"]["seed"])
 train_loader, val_loader, class_to_idx = build_loaders(CONFIG)
 
 
@@ -137,7 +161,6 @@ scaler = GradScaler(enabled=CONFIG["device"].startswith("cuda"))
 best_val_auc = float("-inf")
 best_ckpt_path = None
 run_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-exp_name = CONFIG["experiment_name"]
 
 for epoch in range(CONFIG["train"]["epochs"]):
     train_loss = train_one_epoch(
@@ -166,7 +189,6 @@ for epoch in range(CONFIG["train"]["epochs"]):
     )
 
     checkpoint = {
-        "experiment_name": exp_name,
         "epoch": epoch + 1,
         "stage": "joint_train",
         "run_stamp": run_stamp,
@@ -181,12 +203,12 @@ for epoch in range(CONFIG["train"]["epochs"]):
         "config": CONFIG,
     }
 
-    epoch_ckpt_path = f"/kaggle/working/{exp_name}_{run_stamp}_epoch_{epoch + 1:02d}.pth"
+    epoch_ckpt_path = f"/kaggle/working/{run_stamp}_epoch_{epoch + 1:02d}.pth"
     torch.save(checkpoint, epoch_ckpt_path)
     print(f"Saved epoch checkpoint: {epoch_ckpt_path}")
 
     if not np.isnan(val_auc) and val_auc > best_val_auc:
         best_val_auc = val_auc
-        best_ckpt_path = f"/kaggle/working/{exp_name}_{run_stamp}_best.pth"
+        best_ckpt_path = f"/kaggle/working/{run_stamp}_best.pth"
         torch.save(checkpoint, best_ckpt_path)
         print(f"Saved new best checkpoint: {best_ckpt_path}")

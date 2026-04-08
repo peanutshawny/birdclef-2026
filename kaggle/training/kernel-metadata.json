@@ -1,6 +1,6 @@
 {
-  "id": "shawnliu30/birdclef-2026-training-script",
-  "title": "BirdCLEF 2026 Training Script",
+  "id": "shawnliu30/efficientnet-baseline-new-frontend",
+  "title": "efficientnet baseline new frontend",
   "code_file": "training.py",
   "language": "python",
   "kernel_type": "script",

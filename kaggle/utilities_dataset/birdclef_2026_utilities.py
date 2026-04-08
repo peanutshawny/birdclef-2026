@@ -10,6 +10,7 @@ import soundfile as sf
 import timm
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torchaudio
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import GroupShuffleSplit
@@ -17,6 +18,25 @@ from pathlib import Path
 
 from torch.amp import GradScaler, autocast
 from torch.utils.data import DataLoader, Dataset
+
+
+def seed_everything(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+
+def _seed_worker(worker_id: int) -> None:
+    worker_seed = torch.initial_seed() % 2**32
+    random.seed(worker_seed)
+    np.random.seed(worker_seed)
 
 
 class AudioToSpec:
@@ -50,7 +70,26 @@ class AudioToSpec:
         """
         spec = self.mel_transform(wave)      # [n_mels, time]
         spec = self.db_transform(spec)       # roughly [-top_db, 0]
-        spec = (spec + self.mel_config["top_db"]) / self.mel_config["top_db"]
+
+        if self.mel_config["resize_shape"] is not None:
+            spec = F.interpolate(
+                spec.unsqueeze(0).unsqueeze(0),
+                size=self.mel_config["resize_shape"],
+                mode="bilinear",
+                align_corners=False,
+            ).squeeze(0).squeeze(0)
+
+        if self.mel_config["normalization"] == "top_db":
+            spec = (spec + self.mel_config["top_db"]) / self.mel_config["top_db"]
+        elif self.mel_config["normalization"] == "sample_minmax":
+            spec_min = spec.min()
+            spec_max = spec.max()
+            spec = (spec - spec_min) / (spec_max - spec_min + 1e-7)
+        else:
+            raise ValueError(
+                f"Unsupported normalization mode: {self.mel_config['normalization']}"
+            )
+
         spec = torch.clamp(spec, 0.0, 1.0)
         return spec
 
@@ -485,6 +524,12 @@ def _split_combined_df(config, combined_df: pd.DataFrame) -> tuple[pd.DataFrame,
 
 
 def _make_loader(dataset, config, shuffle: bool) -> DataLoader:
+    generator = torch.Generator()
+    loader_seed = config["train"]["seed"]
+    if not shuffle:
+        loader_seed += 1
+    generator.manual_seed(loader_seed)
+
     return DataLoader(
         dataset,
         batch_size=config["train"]["batch_size"],
@@ -492,6 +537,8 @@ def _make_loader(dataset, config, shuffle: bool) -> DataLoader:
         num_workers=config["dataloader"]["num_workers"],
         pin_memory=True,
         persistent_workers=config["dataloader"]["num_workers"] > 0,
+        worker_init_fn=_seed_worker,
+        generator=generator,
     )
 
 
