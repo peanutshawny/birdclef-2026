@@ -130,8 +130,6 @@
 - Move beyond plain random 5-second crops
 - Ideas:
 - energy-biased crops
-- first-7-seconds or first/last-7-seconds biased crops
-- first-N-seconds ablations
 - multiple random crops per file across epochs
 
 ### SED Head On Top Of Current Backbone

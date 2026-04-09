@@ -14,7 +14,7 @@
     "birdclef-2026"
   ],
   "kernel_sources": [
-    "shawnliu30/efficientnet-baseline-new-frontend"
+    "shawnliu30/efficientnet-4fold-mixup-specaugment"
   ],
   "model_sources": []
 }

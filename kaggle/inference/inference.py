@@ -26,8 +26,9 @@ else:
         f"Could not find {UTILS_MODULE} in any of: {UTILS_SEARCH_DIRS}"
     )
 from birdclef_2026_utilities import (
-    BirdClefEfficientNet,
-    predict_file
+    discover_fold_best_checkpoints,
+    load_checkpoint_ensemble,
+    predict_file_ensemble,
 )
 
 
@@ -36,52 +37,25 @@ TEST_DIR = COMP_DIR / "test_soundscapes"
 SAMPLE_SUBMISSION = COMP_DIR / "sample_submission.csv"
 
 CHECKPOINT_SEARCH_ROOT = Path("/kaggle/input")
-CHECKPOINT_CANDIDATES = sorted(CHECKPOINT_SEARCH_ROOT.rglob("*_best.pth"))
-if not CHECKPOINT_CANDIDATES:
-    raise FileNotFoundError(
-        f"No *_best.pth checkpoint found under {CHECKPOINT_SEARCH_ROOT}"
-    )
-if len(CHECKPOINT_CANDIDATES) > 1:
-    raise RuntimeError(
-        "Multiple *_best.pth checkpoints found under "
-        f"{CHECKPOINT_SEARCH_ROOT}:\n"
-        + "\n".join(f"- {path}" for path in CHECKPOINT_CANDIDATES)
-    )
-CHECKPOINT_PATH = CHECKPOINT_CANDIDATES[0]
+CHECKPOINT_PATHS = discover_fold_best_checkpoints(CHECKPOINT_SEARCH_ROOT)
 
-print(f"Using checkpoint: {CHECKPOINT_PATH}")
+print(f"Using {len(CHECKPOINT_PATHS)} fold-best checkpoints:")
+for checkpoint_path in CHECKPOINT_PATHS:
+    print(f"- {checkpoint_path}")
 torch.set_num_threads(max(1, os.cpu_count() or 1))
 device = "cpu"
 
 submission = pd.read_csv(SAMPLE_SUBMISSION)
 target_columns = [col for col in submission.columns if col != "row_id"]
 
-checkpoint = torch.load(CHECKPOINT_PATH, map_location=device)
-checkpoint_config = checkpoint.get("config", {})
-
-if not checkpoint_config:
-    raise ValueError("Checkpoint config empty.")
-
-class_to_idx = checkpoint["class_to_idx"]
-idx_to_class = {idx: label for label, idx in class_to_idx.items()}
-
-INFER_CONFIG = {
-    "model_name": checkpoint_config["train"]["efficentnet_name"],
-    "sample_rate": checkpoint_config["audio"]["sample_rate"],
-    "duration": checkpoint_config["audio"]["duration"],
-    "infer_batch_size": 24,
-    "mel_spectrogram": checkpoint_config["mel_spectrogram"],
-}
-
-model = BirdClefEfficientNet(
-    num_classes=len(class_to_idx),
-    model_name=INFER_CONFIG["model_name"],
-    is_pretrained=False
+models, class_to_idx, INFER_CONFIG = load_checkpoint_ensemble(
+    CHECKPOINT_PATHS,
+    device=device,
+    infer_batch_size=24,
 )
-model.load_state_dict(checkpoint["model_state_dict"])
-model.eval()
 
-print("model loaded")
+print("ensemble loaded")
+print("ensemble size:", len(models))
 print("sample submission rows:", len(submission))
 print("submission columns:", len(target_columns))
 print("checkpoint classes:", len(class_to_idx))
@@ -104,7 +78,7 @@ for file_id, group_df in tqdm(submission.groupby("file_id", sort=False), total=s
         continue
 
     end_seconds = group_df["end_sec"].tolist()
-    probs = predict_file(audio_path, end_seconds, model, INFER_CONFIG)
+    probs = predict_file_ensemble(audio_path, end_seconds, models, INFER_CONFIG)
 
     output = np.zeros((len(group_df), len(target_columns)), dtype=np.float32)
     for model_idx, submission_idx in model_to_submission:

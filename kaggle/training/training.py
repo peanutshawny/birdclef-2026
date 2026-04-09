@@ -1,16 +1,11 @@
 # Auto-generated from birdclef-2026-training (8).ipynb for local Kaggle CLI workflow.
 
-import numpy as np
 import pandas as pd
-import os
 import sys
 from pathlib import Path
 from datetime import datetime
 
 import torch
-import torch.nn as nn
-from torch.amp import GradScaler
-from torch.optim.lr_scheduler import CosineAnnealingLR
 
 pd.set_option("display.max_columns", None)
 pd.set_option("display.max_colwidth", None)
@@ -35,11 +30,7 @@ else:
     )
 
 from birdclef_2026_utilities import (
-    BirdClefEfficientNet,
-    train_one_epoch,
-    validate_one_epoch,
-    build_loaders,
-    seed_everything,
+    train_one_fold,
 )
 
 
@@ -124,7 +115,7 @@ CONFIG = {
         "epochs": 8,
         "learning_rate": 4e-4,
         "weight_decay": 1e-2,
-        "val_size": 0.2,
+        "n_splits": 4,
         "batch_size": 64,
         "seed": 42,
     },
@@ -132,83 +123,16 @@ CONFIG = {
 }
 
 
-seed_everything(CONFIG["train"]["seed"])
-train_loader, val_loader, class_to_idx = build_loaders(CONFIG)
-
-
-print("train rows:", len(train_loader.dataset))
-print("validation rows:", len(val_loader.dataset))
-print("num classes:", len(class_to_idx))
-print(train_loader.dataset.df["path"].head())
-
-
-model = BirdClefEfficientNet(
-    num_classes=len(class_to_idx),
-    model_name=CONFIG["train"]["efficentnet_name"],
-    is_pretrained=True
-).to(CONFIG["device"])
-
-criterion = nn.BCEWithLogitsLoss()
-optimizer = torch.optim.AdamW(
-    model.parameters(),
-    lr=CONFIG["train"]["learning_rate"],
-    weight_decay=CONFIG["train"]["weight_decay"],
-)
-scheduler = CosineAnnealingLR(optimizer, T_max=CONFIG["train"]["epochs"])
-scaler = GradScaler(enabled=CONFIG["device"].startswith("cuda"))
-
-
-best_val_auc = float("-inf")
-best_ckpt_path = None
 run_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+fold_results = []
 
-for epoch in range(CONFIG["train"]["epochs"]):
-    train_loss = train_one_epoch(
-        model,
-        train_loader,
-        criterion,
-        optimizer,
-        scaler,
-        CONFIG["device"],
-    )
+for fold_idx in range(CONFIG["train"]["n_splits"]):
+    fold_results.append(train_one_fold(CONFIG, fold_idx, run_stamp=run_stamp))
 
-    val_loss, val_auc = validate_one_epoch(
-        model,
-        val_loader,
-        criterion,
-        CONFIG["device"],
-    )
+results_df = pd.DataFrame(fold_results)
+print(results_df[["fold_num", "best_val_auc", "best_ckpt_path"]])
 
-    scheduler.step()
-
-    print(
-        f"Epoch {epoch + 1}/{CONFIG['train']['epochs']} | "
-        f"train_loss={train_loss:.4f} | "
-        f"val_loss={val_loss:.4f} | "
-        f"val_auc={val_auc:.4f}"
-    )
-
-    checkpoint = {
-        "epoch": epoch + 1,
-        "stage": "joint_train",
-        "run_stamp": run_stamp,
-        "model_state_dict": model.state_dict(),
-        "optimizer_state_dict": optimizer.state_dict(),
-        "scheduler_state_dict": scheduler.state_dict(),
-        "scaler_state_dict": scaler.state_dict(),
-        "train_loss": train_loss,
-        "val_loss": val_loss,
-        "val_auc": val_auc,
-        "class_to_idx": class_to_idx,
-        "config": CONFIG,
-    }
-
-    epoch_ckpt_path = f"/kaggle/working/{run_stamp}_epoch_{epoch + 1:02d}.pth"
-    torch.save(checkpoint, epoch_ckpt_path)
-    print(f"Saved epoch checkpoint: {epoch_ckpt_path}")
-
-    if not np.isnan(val_auc) and val_auc > best_val_auc:
-        best_val_auc = val_auc
-        best_ckpt_path = f"/kaggle/working/{run_stamp}_best.pth"
-        torch.save(checkpoint, best_ckpt_path)
-        print(f"Saved new best checkpoint: {best_ckpt_path}")
+valid_auc = results_df["best_val_auc"].dropna()
+if not valid_auc.empty:
+    print(f"cv mean val_auc: {valid_auc.mean():.4f}")
+    print(f"cv std val_auc: {valid_auc.std(ddof=0):.4f}")

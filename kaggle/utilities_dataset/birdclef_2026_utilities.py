@@ -5,6 +5,7 @@ import pandas as pd
 import os
 import random
 import ast
+from datetime import datetime
 
 import soundfile as sf
 import timm
@@ -13,10 +14,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchaudio
 from sklearn.metrics import roc_auc_score
-from sklearn.model_selection import GroupShuffleSplit
+from sklearn.model_selection import GroupKFold
 from pathlib import Path
 
 from torch.amp import GradScaler, autocast
+from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader, Dataset
 
 
@@ -507,19 +509,35 @@ def _build_combined_df(config) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame
     return audio_df, soundscape_df, combined_df
 
 
-def _split_combined_df(config, combined_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    splitter = GroupShuffleSplit(
-        n_splits=1,
-        test_size=config["train"]["val_size"],
-        random_state=config["train"]["seed"],
-    )
+def _split_combined_df(
+    config,
+    combined_df: pd.DataFrame,
+    fold_idx: int,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    n_splits = int(config["train"]["n_splits"])
+    num_groups = combined_df["group_id"].nunique()
 
-    train_idx, val_idx = next(
-        splitter.split(combined_df, groups=combined_df["group_id"])
-    )
+    if n_splits < 2:
+        raise ValueError(f"n_splits must be at least 2, got {n_splits}")
+    if num_groups < n_splits:
+        raise ValueError(
+            f"n_splits={n_splits} exceeds number of groups={num_groups}"
+        )
+    if not 0 <= fold_idx < n_splits:
+        raise ValueError(
+            f"fold_idx must be in [0, {n_splits - 1}], got {fold_idx}"
+        )
+
+    splitter = GroupKFold(n_splits=n_splits)
+    splits = list(splitter.split(combined_df, groups=combined_df["group_id"]))
+    train_idx, val_idx = splits[fold_idx]
 
     train_df = combined_df.iloc[train_idx].reset_index(drop=True)
     val_df = combined_df.iloc[val_idx].reset_index(drop=True)
+
+    print(f"Using GroupKFold fold {fold_idx + 1}/{n_splits}")
+    print("train groups:", train_df["group_id"].nunique())
+    print("validation groups:", val_df["group_id"].nunique())
     return train_df, val_df
 
 
@@ -542,10 +560,10 @@ def _make_loader(dataset, config, shuffle: bool) -> DataLoader:
     )
 
 
-def build_loaders(config) -> tuple[DataLoader, DataLoader, dict[str, int]]:
+def build_loaders(config, fold_idx: int) -> tuple[DataLoader, DataLoader, dict[str, int]]:
     audio_df, soundscape_df, combined_df = _build_combined_df(config)
     class_to_idx = _build_class_to_idx(audio_df, soundscape_df)
-    train_df, val_df = _split_combined_df(config, combined_df)
+    train_df, val_df = _split_combined_df(config, combined_df, fold_idx)
 
     train_ds = BirdClefDataset(
         df=train_df,
@@ -575,8 +593,283 @@ def build_loaders(config) -> tuple[DataLoader, DataLoader, dict[str, int]]:
     return train_loader, val_loader, class_to_idx
 
 
+def train_one_fold(
+    config,
+    fold_idx: int,
+    run_stamp: str | None = None,
+) -> dict[str, object]:
+    n_splits = int(config["train"]["n_splits"])
+    if not 0 <= fold_idx < n_splits:
+        raise ValueError(
+            f"fold_idx must be in [0, {n_splits - 1}], got {fold_idx}"
+        )
+
+    if run_stamp is None:
+        run_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    seed_everything(int(config["train"]["seed"]) + fold_idx)
+    train_loader, val_loader, class_to_idx = build_loaders(config, fold_idx)
+    fold_num = fold_idx + 1
+
+    print(f"fold: {fold_num}/{n_splits}")
+    print("train rows:", len(train_loader.dataset))
+    print("validation rows:", len(val_loader.dataset))
+    print("num classes:", len(class_to_idx))
+
+    model = BirdClefEfficientNet(
+        num_classes=len(class_to_idx),
+        model_name=config["train"]["efficentnet_name"],
+        is_pretrained=True,
+    ).to(config["device"])
+
+    criterion = nn.BCEWithLogitsLoss()
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=config["train"]["learning_rate"],
+        weight_decay=config["train"]["weight_decay"],
+    )
+    scheduler = CosineAnnealingLR(optimizer, T_max=config["train"]["epochs"])
+    scaler = GradScaler(enabled=config["device"].startswith("cuda"))
+
+    best_val_auc = float("nan")
+    best_val_auc_for_compare = float("-inf")
+    best_ckpt_path = None
+    history = []
+
+    for epoch in range(config["train"]["epochs"]):
+        train_loss = train_one_epoch(
+            model,
+            train_loader,
+            criterion,
+            optimizer,
+            scaler,
+            config["device"],
+        )
+
+        val_loss, val_auc = validate_one_epoch(
+            model,
+            val_loader,
+            criterion,
+            config["device"],
+        )
+
+        scheduler.step()
+
+        print(
+            f"Epoch {epoch + 1}/{config['train']['epochs']} | "
+            f"train_loss={train_loss:.4f} | "
+            f"val_loss={val_loss:.4f} | "
+            f"val_auc={val_auc:.4f}"
+        )
+
+        checkpoint = {
+            "epoch": epoch + 1,
+            "run_stamp": run_stamp,
+            "fold_idx": fold_idx,
+            "n_splits": n_splits,
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "scheduler_state_dict": scheduler.state_dict(),
+            "scaler_state_dict": scaler.state_dict(),
+            "train_loss": train_loss,
+            "val_loss": val_loss,
+            "val_auc": val_auc,
+            "class_to_idx": class_to_idx,
+            "config": config,
+        }
+
+        epoch_ckpt_path = (
+            f"/kaggle/working/{run_stamp}_fold_{fold_num:02d}_epoch_{epoch + 1:02d}.pth"
+        )
+
+        history.append(
+            {
+                "epoch": epoch + 1,
+                "train_loss": train_loss,
+                "val_loss": val_loss,
+                "val_auc": val_auc,
+                "epoch_ckpt_path": epoch_ckpt_path,
+            }
+        )
+
+        if not np.isnan(val_auc) and val_auc > best_val_auc_for_compare:
+            best_val_auc_for_compare = val_auc
+            best_val_auc = val_auc
+            best_ckpt_path = (
+                f"/kaggle/working/{run_stamp}_fold_{fold_num:02d}_best.pth"
+            )
+            torch.save(checkpoint, best_ckpt_path)
+            print(f"Saved new best checkpoint: {best_ckpt_path}")
+
+    print(f"Completed fold {fold_num}/{n_splits} | best_val_auc={best_val_auc:.4f}")
+    return {
+        "fold_idx": fold_idx,
+        "fold_num": fold_num,
+        "best_val_auc": best_val_auc,
+        "best_ckpt_path": best_ckpt_path,
+        "history": history,
+    }
+
+
 ### INFERENCE
 #############
+
+
+def _parse_fold_best_checkpoint_path(checkpoint_path: Path) -> tuple[str, int]:
+    name = checkpoint_path.name
+    if not name.endswith("_best.pth") or "_fold_" not in name:
+        raise ValueError(
+            f"Checkpoint does not match fold-best naming convention: {checkpoint_path}"
+        )
+
+    stem = name[: -len("_best.pth")]
+    run_stamp, fold_num_text = stem.rsplit("_fold_", maxsplit=1)
+    if not run_stamp or not fold_num_text.isdigit():
+        raise ValueError(
+            f"Checkpoint does not match fold-best naming convention: {checkpoint_path}"
+        )
+
+    return run_stamp, int(fold_num_text)
+
+
+def discover_fold_best_checkpoints(search_root: Path) -> list[Path]:
+    checkpoint_candidates = sorted(search_root.rglob("*_fold_*_best.pth"))
+    if not checkpoint_candidates:
+        raise FileNotFoundError(
+            f"No *_fold_*_best.pth checkpoints found under {search_root}"
+        )
+
+    grouped_candidates: dict[str, list[tuple[int, Path]]] = {}
+    for checkpoint_path in checkpoint_candidates:
+        run_stamp, fold_num = _parse_fold_best_checkpoint_path(checkpoint_path)
+        grouped_candidates.setdefault(run_stamp, []).append((fold_num, checkpoint_path))
+
+    if len(grouped_candidates) > 1:
+        grouped_lines = []
+        for run_stamp, items in sorted(grouped_candidates.items()):
+            grouped_lines.append(f"{run_stamp}:")
+            grouped_lines.extend(
+                f"- {path}" for _, path in sorted(items, key=lambda item: item[0])
+            )
+        raise RuntimeError(
+            "Multiple fold-checkpoint runs found under "
+            f"{search_root}. Attach exactly one run:\n"
+            + "\n".join(grouped_lines)
+        )
+
+    _, run_items = next(iter(grouped_candidates.items()))
+    sorted_items = sorted(run_items, key=lambda item: item[0])
+    fold_numbers = [fold_num for fold_num, _ in sorted_items]
+    if len(fold_numbers) != len(set(fold_numbers)):
+        raise RuntimeError(
+            "Duplicate fold numbers found:\n"
+            + "\n".join(f"- {path}" for _, path in sorted_items)
+        )
+
+    return [path for _, path in sorted_items]
+
+
+def _extract_infer_config(checkpoint, infer_batch_size: int) -> tuple[dict, dict[str, int]]:
+    checkpoint_config = checkpoint.get("config", {})
+    if not checkpoint_config:
+        raise ValueError("Checkpoint config empty.")
+
+    class_to_idx = checkpoint["class_to_idx"]
+    infer_config = {
+        "model_name": checkpoint_config["train"]["efficentnet_name"],
+        "sample_rate": checkpoint_config["audio"]["sample_rate"],
+        "duration": checkpoint_config["audio"]["duration"],
+        "infer_batch_size": infer_batch_size,
+        "mel_spectrogram": checkpoint_config["mel_spectrogram"],
+    }
+    return infer_config, class_to_idx
+
+
+def load_checkpoint_ensemble(
+    checkpoint_paths: list[Path],
+    device: str = "cpu",
+    infer_batch_size: int = 24,
+) -> tuple[list[nn.Module], dict[str, int], dict]:
+    if not checkpoint_paths:
+        raise ValueError("checkpoint_paths cannot be empty")
+
+    checkpoints = [torch.load(path, map_location=device) for path in checkpoint_paths]
+    infer_config, class_to_idx = _extract_infer_config(
+        checkpoints[0],
+        infer_batch_size=infer_batch_size,
+    )
+
+    expected_n_splits = checkpoints[0].get("n_splits")
+    fold_indices = []
+    models = []
+
+    for checkpoint_path, checkpoint in zip(checkpoint_paths, checkpoints):
+        current_infer_config, current_class_to_idx = _extract_infer_config(
+            checkpoint,
+            infer_batch_size=infer_batch_size,
+        )
+
+        if current_class_to_idx != class_to_idx:
+            raise RuntimeError(
+                "class_to_idx mismatch across ensemble checkpoints:\n"
+                f"- {checkpoint_paths[0]}\n"
+                f"- {checkpoint_path}"
+            )
+
+        if current_infer_config != infer_config:
+            raise RuntimeError(
+                "Inference config mismatch across ensemble checkpoints:\n"
+                f"- {checkpoint_paths[0]}\n"
+                f"- {checkpoint_path}"
+            )
+
+        fold_idx = checkpoint.get("fold_idx")
+        if fold_idx is None:
+            raise ValueError(f"Checkpoint missing fold_idx: {checkpoint_path}")
+        fold_indices.append(int(fold_idx))
+
+        current_n_splits = checkpoint.get("n_splits")
+        if expected_n_splits is not None and current_n_splits != expected_n_splits:
+            raise RuntimeError(
+                "n_splits mismatch across ensemble checkpoints:\n"
+                f"- {checkpoint_paths[0]}\n"
+                f"- {checkpoint_path}"
+            )
+
+        model = BirdClefEfficientNet(
+            num_classes=len(class_to_idx),
+            model_name=infer_config["model_name"],
+            is_pretrained=False,
+        ).to(device)
+        model.load_state_dict(checkpoint["model_state_dict"])
+        model.eval()
+        models.append(model)
+
+    if len(fold_indices) != len(set(fold_indices)):
+        raise RuntimeError(
+            "Duplicate fold_idx values in ensemble checkpoints:\n"
+            + "\n".join(f"- {path}" for path in checkpoint_paths)
+        )
+
+    if expected_n_splits is not None:
+        expected_fold_indices = set(range(int(expected_n_splits)))
+        observed_fold_indices = set(fold_indices)
+        if observed_fold_indices != expected_fold_indices:
+            missing = sorted(expected_fold_indices - observed_fold_indices)
+            extra = sorted(observed_fold_indices - expected_fold_indices)
+            details = []
+            if missing:
+                details.append(f"missing fold_idx values: {missing}")
+            if extra:
+                details.append(f"unexpected fold_idx values: {extra}")
+            raise RuntimeError(
+                "Incomplete fold ensemble:\n"
+                + "\n".join(details)
+                + "\ncheckpoints:\n"
+                + "\n".join(f"- {path}" for path in checkpoint_paths)
+            )
+
+    return models, class_to_idx, infer_config
 
 def build_segment_tensor(audio_path: Path, end_seconds: list[int], config) -> torch.Tensor:
     num_samples = config["sample_rate"] * config["duration"]
@@ -606,14 +899,43 @@ def build_segment_tensor(audio_path: Path, end_seconds: list[int], config) -> to
 
 
 @torch.no_grad()
-def predict_file(audio_path: Path, end_seconds: list[int], model, config) -> np.ndarray:
-    specs = build_segment_tensor(audio_path, end_seconds, config)
+def predict_specs(specs: torch.Tensor, model: nn.Module, config) -> np.ndarray:
     preds = []
+    model_device = next(model.parameters()).device
 
     for start in range(0, len(specs), config["infer_batch_size"]):
-        batch = specs[start:start + config["infer_batch_size"]]
+        batch = specs[start:start + config["infer_batch_size"]].to(model_device)
         logits = model(batch)
         probs = torch.sigmoid(logits).cpu().numpy()
         preds.append(probs)
 
     return np.concatenate(preds, axis=0)
+
+
+@torch.no_grad()
+def predict_file(audio_path: Path, end_seconds: list[int], model, config) -> np.ndarray:
+    specs = build_segment_tensor(audio_path, end_seconds, config)
+    return predict_specs(specs, model, config)
+
+
+@torch.no_grad()
+def predict_file_ensemble(
+    audio_path: Path,
+    end_seconds: list[int],
+    models: list[nn.Module],
+    config,
+) -> np.ndarray:
+    if not models:
+        raise ValueError("models cannot be empty")
+
+    specs = build_segment_tensor(audio_path, end_seconds, config)
+    ensemble_probs = np.zeros((len(end_seconds), 0), dtype=np.float32)
+
+    for model_idx, model in enumerate(models):
+        model_probs = predict_specs(specs, model, config)
+        if model_idx == 0:
+            ensemble_probs = np.zeros_like(model_probs, dtype=np.float32)
+        ensemble_probs += model_probs.astype(np.float32)
+
+    ensemble_probs /= len(models)
+    return ensemble_probs

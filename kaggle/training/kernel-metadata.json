@@ -1,6 +1,6 @@
 {
-  "id": "shawnliu30/efficientnet-baseline-new-frontend",
-  "title": "efficientnet baseline new frontend",
+  "id": "shawnliu30/efficientnet-4fold-mixup-specaugment",
+  "title": "efficientnet 4fold mixup specaugment",
   "code_file": "training.py",
   "language": "python",
   "kernel_type": "script",
