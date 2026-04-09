@@ -14,7 +14,7 @@
     "birdclef-2026"
   ],
   "kernel_sources": [
-    "shawnliu30/efficientnet-4fold-mixup-specaugment"
+    "shawnliu30/efficientnet-4fold-15secs"
   ],
   "model_sources": []
 }

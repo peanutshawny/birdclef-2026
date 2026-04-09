@@ -89,7 +89,7 @@ CONFIG = {
     },
     "audio": {
         "sample_rate": 32000,
-        "duration": 5,
+        "duration": 15,
     },
     "augmentations": {
         "wave_mixup": {

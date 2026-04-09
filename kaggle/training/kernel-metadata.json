@@ -1,6 +1,6 @@
 {
-  "id": "shawnliu30/efficientnet-4fold-mixup-specaugment",
-  "title": "efficientnet 4fold mixup specaugment",
+  "id": "shawnliu30/efficientnet-4fold-15secs",
+  "title": "efficientnet 4fold 15secs",
   "code_file": "training.py",
   "language": "python",
   "kernel_type": "script",

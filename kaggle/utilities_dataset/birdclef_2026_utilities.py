@@ -194,7 +194,12 @@ class BirdClefDataset(Dataset):
         start_sec = row["start_sec"]
 
         if pd.notna(start_sec):
-            start_frame = int(float(start_sec) * self.sample_rate)
+            start_sec = float(start_sec)
+            if row["source"] == "train_soundscape":
+                soundscape_end_sec = start_sec + 5.0
+                start_sec = max(0.0, soundscape_end_sec - self.duration)
+
+            start_frame = int(start_sec * self.sample_rate)
             wave, sr = self._read_partial_audio(path, start_frame=start_frame)
         else:
             wave, sr = self._read_partial_audio(path, start_frame=None)
@@ -769,7 +774,11 @@ def discover_fold_best_checkpoints(search_root: Path) -> list[Path]:
     return [path for _, path in sorted_items]
 
 
-def _extract_infer_config(checkpoint, infer_batch_size: int) -> tuple[dict, dict[str, int]]:
+def _extract_infer_config(
+    checkpoint,
+    infer_batch_size: int,
+    infer_duration: int,
+) -> tuple[dict, dict[str, int]]:
     checkpoint_config = checkpoint.get("config", {})
     if not checkpoint_config:
         raise ValueError("Checkpoint config empty.")
@@ -778,7 +787,7 @@ def _extract_infer_config(checkpoint, infer_batch_size: int) -> tuple[dict, dict
     infer_config = {
         "model_name": checkpoint_config["train"]["efficentnet_name"],
         "sample_rate": checkpoint_config["audio"]["sample_rate"],
-        "duration": checkpoint_config["audio"]["duration"],
+        "duration": infer_duration,
         "infer_batch_size": infer_batch_size,
         "mel_spectrogram": checkpoint_config["mel_spectrogram"],
     }
@@ -789,6 +798,7 @@ def load_checkpoint_ensemble(
     checkpoint_paths: list[Path],
     device: str = "cpu",
     infer_batch_size: int = 24,
+    infer_duration: int = 5,
 ) -> tuple[list[nn.Module], dict[str, int], dict]:
     if not checkpoint_paths:
         raise ValueError("checkpoint_paths cannot be empty")
@@ -797,6 +807,7 @@ def load_checkpoint_ensemble(
     infer_config, class_to_idx = _extract_infer_config(
         checkpoints[0],
         infer_batch_size=infer_batch_size,
+        infer_duration=infer_duration,
     )
 
     expected_n_splits = checkpoints[0].get("n_splits")
@@ -807,6 +818,7 @@ def load_checkpoint_ensemble(
         current_infer_config, current_class_to_idx = _extract_infer_config(
             checkpoint,
             infer_batch_size=infer_batch_size,
+            infer_duration=infer_duration,
         )
 
         if current_class_to_idx != class_to_idx:
